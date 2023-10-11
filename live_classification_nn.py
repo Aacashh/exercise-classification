@@ -168,81 +168,112 @@ def count_reps(class_label, results, prev_hip_y, state, rep_count, cumulative_mo
     return rep_count, state, cumulative_motion
 
 
-def count_reps_using_angles(class_label, results, state, rep_count):
+def count_reps_using_angles(class_label, results, state, rep_count, initial_angles=None):
     if results is not None:
         landmarks = results.pose_landmarks.landmark
 
-        # Overhead Squat
+        if initial_angles is None:
+            initial_angles = {}
+
+        def get_or_set_initial_angle(label, angle):
+            if label not in initial_angles:
+                initial_angles[label] = angle
+            return initial_angles[label]
+
+        # Overhead Squat: Major joint motion at hips
         if class_label == "Overhead Squat":
-            # Monitoring the angle at the hips
-            angle_hips = calculate_angle(landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
-                                         landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value],
-                                         landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value])
+            angle_hips = calculate_angle(
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value]
+            )
+            initial_angle = get_or_set_initial_angle("Overhead Squat", angle_hips)
+            lower_threshold = initial_angle * 0.9
+            upper_threshold = initial_angle * 1.1
 
-            if state == "start" and angle_hips < 160:
+            if state == "start" and angle_hips < lower_threshold:
                 state = "down"
-            elif state == "down" and angle_hips > 175:
+            elif state == "down" and angle_hips > upper_threshold:
                 state = "up"
                 rep_count += 1
                 state = "start"
+                initial_angles.pop("Overhead Squat", None)  # Reset initial angle
 
-        # Box Jumps
+        # Box Jumps: Major joint motion at knees
         elif class_label == "Box Jumps":
-            # Monitoring the angle at the knees
-            angle_knees = calculate_angle(landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
-                                          landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value],
-                                          landmarks[mp.solutions.pose.PoseLandmark.LEFT_ANKLE.value])
-            
-            if state == "start" and angle_knees < 150:
+            angle_knees = calculate_angle(
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_ANKLE.value]
+            )
+            initial_angle = get_or_set_initial_angle("Box Jumps", angle_knees)
+            lower_threshold = initial_angle * 0.9
+            upper_threshold = initial_angle * 1.1
+
+            if state == "start" and angle_knees < lower_threshold:
                 state = "up"
-            elif state == "up" and angle_knees > 160:
+            elif state == "up" and angle_knees > upper_threshold:
                 state = "down"
                 rep_count += 1
                 state = "start"
+                initial_angles.pop("Box Jumps", None)  # Reset initial angle
 
-        # Glute Bridges
+        # Glute Bridges: Major joint motion at hips
         elif class_label == "Glute Bridges":
-            # Monitoring the angle at the hips
-            angle_hips = calculate_angle(landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value],
-                                         landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
-                                         landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value])
-            
-            if state == "start" and angle_hips < 160:
+            angle_hips = calculate_angle(
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value]
+            )
+            initial_angle = get_or_set_initial_angle("Glute Bridges", angle_hips)
+            lower_threshold = initial_angle * 0.9
+            upper_threshold = initial_angle * 1.1
+
+            if state == "start" and angle_hips < lower_threshold:
                 state = "up"
-            elif state == "up" and angle_hips > 175:
+            elif state == "up" and angle_hips > upper_threshold:
                 state = "down"
                 rep_count += 1
                 state = "start"
+                initial_angles.pop("Glute Bridges", None)  # Reset initial angle
 
-        # Back Lunges
+        # Back Lunges: Major joint motion at the forward knee
         elif class_label == "Back Lunges":
-            # Monitoring the angle at the forward knee
-            angle_knee = calculate_angle(landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
-                                         landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value],
-                                         landmarks[mp.solutions.pose.PoseLandmark.LEFT_ANKLE.value])
-            
-            if state == "start" and angle_knee > 155:
+            angle_knee = calculate_angle(
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_HIP.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_KNEE.value],
+                landmarks[mp.solutions.pose.PoseLandmark.LEFT_ANKLE.value]
+            )
+            initial_angle = get_or_set_initial_angle("Back Lunges", angle_knee)
+            lower_threshold = initial_angle * 0.9
+            upper_threshold = initial_angle * 1.1
+
+            if state == "start" and angle_knee > upper_threshold:
                 state = "lunge"
-            elif state == "lunge" and angle_knee < 145:
+            elif state == "lunge" and angle_knee < lower_threshold:
                 state = "up"
                 rep_count += 1
                 state = "start"
+                initial_angles.pop("Back Lunges", None)  # Reset initial angle
 
-    return rep_count, state
-                
+    return rep_count, state, initial_angles
+
+
+
+from collections import Counter
 import time
 
 def main():
     # Initialize model and pose object
     tf_model, pose = initialize()
     cap = cv2.VideoCapture(0)
-    predicted_classes = []
+    interval_predictions = []  # Store predictions for each 5-second interval
     rep_count = 0
     state = "start"
-    # Initialize variables
-    last_classification_time = 0
-    last_class_label = None
-    
+    last_interval_time = time.time()  # Time when the last 5-second interval started
+    current_exercise = None  # The current exercise for which reps are being counted
+    rep_completed = False  # Flag to indicate if a rep has been completed
+    initial_angles = None
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -251,19 +282,32 @@ def main():
         results = process_landmarks(frame, pose)
 
         if results and results.pose_landmarks:
-            if time.time() - last_classification_time > 2:
-                class_label = classify_exercise(results, tf_model)
-                if class_label != last_class_label:
-                    predicted_classes.append(class_label)
-                last_class_label = class_label
-                last_classification_time = time.time()
-            else:
-                class_label = last_class_label
-                
-            
-            rep_count, state = count_reps_using_angles(class_label, results, state, rep_count)
-            # prev_hip_y = avg_hip_y
-                
+            if time.time() - last_interval_time >= 5:  # 5-second interval elapsed
+                if interval_predictions:  # Check if we have any predictions in this interval
+                    # Find the most common prediction
+                    majority_class = Counter(interval_predictions).most_common(1)[0][0]
+                    # Update the current exercise only if a rep has been completed
+                    if rep_completed or current_exercise is None:
+                        current_exercise = majority_class  
+                        print(f"New Majority Exercise: {majority_class}")
+                        rep_completed = False  # Reset the flag
+
+                # Reset for the next interval
+                last_interval_time = time.time()
+                interval_predictions = []
+
+            # Make a new prediction
+            class_label = classify_exercise(results, tf_model)
+            interval_predictions.append(class_label)
+
+            # Count reps only for the current majority exercise
+            if class_label == current_exercise:
+                new_rep_count, state, initial_angles = count_reps_using_angles(class_label, results, state, rep_count, initial_angles=None)
+                if new_rep_count > rep_count:
+                    rep_completed = True  # A rep has been completed
+                rep_count = new_rep_count
+
+            # Display results (assuming you have a function for this)
             display_results(frame, class_label, rep_count)
 
         try:
@@ -272,17 +316,11 @@ def main():
         except cv2.error as e:
             print(f"OpenCV Error: {e}")
 
-
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-        if predicted_classes:
-            majority_class = Counter(predicted_classes).most_common(1)[0][0]
-            print(f"Majority Exercise: {majority_class}")
-        else:
-            print("No classes were predicted.")
-
     cap.release()
     cv2.destroyAllWindows()
+
 if __name__ == "__main__":
     main()
