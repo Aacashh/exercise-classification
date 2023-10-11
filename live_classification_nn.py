@@ -1,8 +1,8 @@
+from tensorflow.keras.models import load_model
+import numpy as np
 import cv2
 import mediapipe as mp
-import numpy as np
 from collections import Counter
-import joblib
 import time
 
 # Global variables
@@ -14,11 +14,12 @@ exercise_muscles_dict = {
     "Back Lunges": ["Quadriceps", "Hamstrings", "Glutes", "Calves"]
 }
 
+
 def initialize():
-    rf_model = joblib.load('Exercise_pred_model.pkl')
+    tf_model = load_model('model')
     mp_pose = mp.solutions.pose
     pose = mp_pose.Pose()
-    return rf_model, pose
+    return tf_model, pose
 
 def process_landmarks(frame, pose):
     imgRGB = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -34,16 +35,32 @@ def process_landmarks(frame, pose):
     # else:
     #     return None
 
-def classify_exercise(results, rf_model):
+def classify_exercise(results, tf_model):
     temp = []
-
+    # indices to exlude = 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,29,30,31,32
+    # names_indices_to_exclude = [
+    #     'NOSE', 'LEFT_EYE_INNER', 'LEFT_EYE', 'LEFT_EYE_OUTER',
+    #     'RIGHT_EYE_INNER', 'RIGHT_EYE', 'RIGHT_EYE_OUTER', 'LEFT_EAR', 'RIGHT_EAR',
+    #     'MOUTH_LEFT', 'MOUTH_RIGHT', 'LEFT_SHOULDER', 'RIGHT_SHOULDER',
+    #     'LEFT_ELBOW', 'RIGHT_ELBOW', 'LEFT_WRIST', 'RIGHT_WRIST', 'LEFT_PINKY',
+    #     'RIGHT_PINKY', 'LEFT_INDEX', 'RIGHT_INDEX', 'LEFT_THUMB', 'RIGHT_THUMB',
+    #     'LEFT_HIP', 'RIGHT_HIP', 'LEFT_KNEE', 'RIGHT_KNEE', 'LEFT_ANKLE',
+    #     'RIGHT_ANKLE', 'LEFT_HEEL', 'RIGHT_HEEL', 'LEFT_FOOT_INDEX', 'RIGHT_FOOT_INDEX'
+    # ]
+    # print(results.pose_landmarks.landmark) #debug
+    indices_to_exclude = [0,1,2,3,4,5,6,7,8,9,10,17,18,19,20,21,22,31,32]
     if results.pose_landmarks:
-        for landmark in results.pose_landmarks.landmark:
-            temp += [landmark.x, landmark.y, landmark.z, landmark.visibility]
+        for i, landmark in enumerate(results.pose_landmarks.landmark):
+            print(landmark)
+            if i not in indices_to_exclude:
+                print(i) # debug
+                temp += [landmark.x, landmark.y, landmark.z, landmark.visibility]
 
         temp = np.array(temp).reshape(1, -1)
-        
-        class_label = rf_model.predict(temp)[0]
+        print("Prediction shape:", temp.shape)
+        print("Prediction value:", temp)
+        class_label = np.argmax(tf_model.predict(temp), axis=1)[0]
+        print(class_label)
         return class_label
 
 
@@ -216,16 +233,13 @@ def count_reps_using_angles(class_label, results, state, rep_count):
 import time
 
 def main():
-    rf_model, pose = initialize()
+    # Initialize model and pose object
+    tf_model, pose = initialize()
     cap = cv2.VideoCapture(0)
     predicted_classes = []
-    
     rep_count = 0
     state = "start"
-    prev_hip_y = None
-    cumulative_motion = float(0)
-    # Initialize class label and timers
-    current_time = time.time()
+    # Initialize variables
     last_classification_time = 0
     last_class_label = None
     
@@ -237,39 +251,38 @@ def main():
         results = process_landmarks(frame, pose)
 
         if results and results.pose_landmarks:
-            # Classify every 3 seconds
             if time.time() - last_classification_time > 2:
-                class_label = classify_exercise(results, rf_model)
-                if class_label != last_class_label:  # Only append if classification changes
+                class_label = classify_exercise(results, tf_model)
+                if class_label != last_class_label:
                     predicted_classes.append(class_label)
                 last_class_label = class_label
                 last_classification_time = time.time()
             else:
                 class_label = last_class_label
-
-            # left_hip_y = results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_HIP.value].y
-            # right_hip_y = results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_HIP.value].y
-            # avg_hip_y = (left_hip_y + right_hip_y) / 2.0
-
-            # difference = abs(avg_hip_y - prev_hip_y) if prev_hip_y is not None else 0.0
-
+                
+            
             rep_count, state = count_reps_using_angles(class_label, results, state, rep_count)
             # prev_hip_y = avg_hip_y
                 
             display_results(frame, class_label, rep_count)
 
-        if cv2.getWindowProperty('Live Exercise Classification', cv2.WND_PROP_VISIBLE) < 1:
-            break
+        try:
+            if cv2.getWindowProperty('Live Exercise Classification', cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error as e:
+            print(f"OpenCV Error: {e}")
+
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
+        if predicted_classes:
+            majority_class = Counter(predicted_classes).most_common(1)[0][0]
+            print(f"Majority Exercise: {majority_class}")
+        else:
+            print("No classes were predicted.")
+
     cap.release()
     cv2.destroyAllWindows()
-
-    majority_class = Counter(predicted_classes).most_common(1)[0][0]
-    print(f"Majority Exercise: {majority_class}")
-
-
 if __name__ == "__main__":
     main()
